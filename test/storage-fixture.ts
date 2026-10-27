@@ -1,0 +1,6 @@
+import type {Course,Services} from '../src/types.ts';
+// Explicit injected test double: production has no memory/local fallback.
+export function memoryStorage():Services{
+ const rows=new Map<string,Course>();const files=new Map<string,Uint8Array>();
+ return {courses:{async list(){return structuredClone([...rows.values()]);},async get(id){return structuredClone(rows.get(id));},async save(c){rows.set(c.id,structuredClone(c));},async delete(id){rows.delete(id);},async close(){}},objects:{async put(k,b){files.set(k,b.slice());},async get(k){const b=files.get(k);if(!b)throw Error('Object not found');return b.slice();},async delete(k){files.delete(k);}}};
+}

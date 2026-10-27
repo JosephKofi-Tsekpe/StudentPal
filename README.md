@@ -1,58 +1,68 @@
 # StudentPal
 
-Standalone student learning prototype with a **Node.js + TypeScript backend**, a responsive HTML/CSS/JavaScript interface, SQLite persistence and direct OpenAI Responses API integration. No Python, Base44 or Lovable runtime is required.
+Node.js + TypeScript student learning prototype with a responsive interface, **Neon Postgres through Prisma ORM**, private **Neon S3-compatible Object Storage**, and direct OpenAI PDF understanding. No SQLite, local document storage, Python, Base44 or Lovable runtime is required.
+
+## Configure Neon
+
+1. Create a Neon staging project/branch in a region supporting Object Storage. Keep database and storage on the same intended branch.
+2. Copy the pooled Postgres connection string into `DATABASE_URL`, preserving `sslmode=require`. Optionally set `DIRECT_URL` to the direct connection string for migrations.
+3. Create a **private** bucket such as `studentpal-materials`. Obtain the branch's S3 endpoint, region, access key and secret key with storage read/write access. Copy them to `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and set `S3_BUCKET` to the actual bucket name. These are storage credentials, not a Neon account API key.
+4. Set `OPENAI_API_KEY` in your server environment. Never commit or share credentials in chat.
+
+Official setup: https://neon.com/docs/storage/get-started and https://neon.com/docs/guides/prisma
 
 ## Start locally
 
-Install Node.js 24 or newer, then:
+Use Node.js 24 or newer. Copy `.env.example` to `.env` and fill in the values, then run:
 
 ```sh
 npm ci
-```
-
-Copy `.env.example` to `.env`, set `OPENAI_API_KEY` using your own OpenAI developer API key, then:
-
-```sh
+npm run build
+npm run db:migrate
 npm start
 ```
 
-Open http://127.0.0.1:8000. Set `OPENAI_MODEL` to override the default `gpt-4.1`. Keys are read on the server and never sent to the browser. API usage requires available OpenAI API credits. A configured key has not necessarily been validated.
-
-## Current features
-
-- Multiple courses and private local PDF storage (20 MB upload limit).
-- OpenAI reads PDF text and visual page content in five-page sections, preserving original page labels.
-- Background processing with visible progress, useful errors and resume from the last saved section after a failure/restart.
-- Source-grounded lessons with examples and textual page references.
-- Manually selected nonconsecutive study dates and completion tracking.
-- Timed Quick Quiz (5-15 questions) and Main Quiz (15-100), with MCQ, theory or mixed questions.
-- Backend answer keys, validated question structure and deterministic MCQ grading.
-- Theory model-answer self-review and saved attempt history.
-- External resource search links and course deletion.
-
-## Development
-
-```sh
-npm run typecheck
-npm test
-```
-
-Tests cover HTTP serving, PDF upload/validation, plan dates, missing-key handling, deletion and cross-origin rejection. Live OpenAI calls require a key and are not part of the automated tests.
-
-## Current boundaries
-
-This is a single-user local prototype, bound to localhost. Production hosting requires authentication, per-user authorization, rate limits and deployment hardening. Uploaded PDFs and the SQLite database live in `data/`, which is excluded from Git. Do not commit `.env`, keys, documents or user data.
-
-PDF only: export slides, images and Word documents to PDF first. The study calendar stores the topic you enter on each selected date; automatic workload allocation and editable topic outlines remain to be built. Theory AI grading, flashcards, notes, reminders, clickable source viewers and semantic duplicate detection remain to be built. Quiz countdowns and answers do not yet recover in the UI after refresh, and the timer is not a secure exam boundary. AI theory answers are for self-review, not scored mastery.
-
-Large documents incur usage for each analyzed section. Start with a short PDF. Lesson retrieval selects relevant text by keywords with a bounded context, so it is not exhaustive whole-book synthesis. Treat AI explanations and extracted visual details as reviewable output.
+Open http://127.0.0.1:8000. `OPENAI_MODEL` defaults to `gpt-4.1`. OpenAI API usage requires separate API credits. Merely configuring a key is not a verified successful AI connection.
 
 ## Render staging (free)
 
-In Render choose **New > Blueprint**, connect this repository, and use the root `render.yaml`. The Blueprint creates one free Node web service on `main`, installs dependencies, type-checks, runs tests, and starts the server on Render's supplied port. No paid disk or database is created.
+Choose **New > Blueprint**, connect this repository and select the root `render.yaml`. It creates one free service on `main`; no paid disk or Render database is provisioned. Fill the secret environment fields with Neon and OpenAI values. If you need a direct migration connection, also add `DIRECT_URL` in the service Environment settings.
 
-Enter `OPENAI_API_KEY` in Render's secure environment form. On the service's Environment page, reveal the generated `STAGING_PASSWORD`. Open the service URL and sign in with username `studentpal` and that password. This shared password protects the existing single-user workspace; it does not create separate student accounts. The public `/healthz` endpoint exposes no course data and makes no OpenAI calls.
+Render runs Prisma generation, TypeScript checks and offline tests during build. Startup applies committed migrations with `prisma migrate deploy` before listening on Render's supplied `PORT` and `0.0.0.0`. The deployment will fail clearly until Neon credentials and bucket are configured. Never run `prisma migrate dev` or `db push` during deployment.
 
-Free services sleep after 15 minutes without incoming traffic and may take about a minute to wake. **Every redeploy, restart or spin-down loses the local SQLite database and uploaded PDFs.** Use disposable test materials only. Durable staging will require external database/object storage or a paid persistent disk. OpenAI API usage is billed separately from Render hosting.
+Retrieve Render's generated `STAGING_PASSWORD` from the service Environment page. Sign in using username `studentpal` and that password. This is a shared staging workspace, not separate student accounts. Public `/healthz` is a process liveness check; startup verifies database access but health checks do not call OpenAI or prove bucket access.
 
-Render supplies `PORT` and `RENDER_EXTERNAL_HOSTNAME`; the Blueprint sets `HOST=0.0.0.0`. Hosted requests accept the Render hostname and its HTTPS origin. Local development keeps localhost defaults. Do not remove staging password protection while this app uses a shared workspace.
+Free Render services can sleep, restart and lose their local filesystem. Course data and PDFs now live externally and survive those events, subject to your Neon project's retention and plan limits. A running document job is interrupted if Render stops; retry resumes after the last saved five-page section. Sleep can still cause cold-start delays. Use one staging instance: distributed processing leases and durable job workers are not implemented.
+
+## Storage design
+
+Prisma's `Course` table stores the existing course document in JSONB with timestamps, preserving the current API/UI format during migration. The document includes plans, extracted content, quiz history and private active quiz answer keys. This is an incremental migration, not a normalized multi-user schema. PDFs use random course-ID object keys, private S3 requests, and path-style addressing; no public URLs are needed.
+
+Upload stores the PDF before saving its record and attempts object cleanup if the database write fails. Deletion removes the object first, preserving the record if storage deletion fails. Database and object storage cannot share an atomic transaction; interrupted operations can require orphan cleanup. Full account ownership and distributed locking remain future work.
+
+There is deliberately no automatic local fallback. Existing SQLite databases and local PDFs are **not imported** by this migration. Preserve/export any old data before retiring an old deployment, or re-upload test materials after switching.
+
+## Current features
+
+- Multiple courses, PDF uploads up to 20 MB, private remote storage.
+- OpenAI extracts text, equations, tables and visual page descriptions in five-page sections with source labels.
+- Visible processing progress, saved partial work and retry/restart recovery.
+- Source-grounded lessons and examples.
+- Nonconsecutive study dates and completion tracking.
+- Quick Quiz (5-15) and Main Quiz (15-100), MCQ/theory/mixed formats, backend answer keys, deterministic MCQ grading and theory model-answer self-review.
+- Attempt history, resource search links and deletion.
+
+## Development and validation
+
+```sh
+npm run build
+npm test
+```
+
+Unit tests inject explicit in-memory storage doubles. They verify API flows, errors, restart recovery, staging login and host/origin validation without cloud credentials. They are **not** proof of a live Neon or OpenAI connection. Validate an actual PDF upload, read, server restart, history retrieval and deletion once staging credentials are configured.
+
+For schema changes use `prisma migrate dev` against an isolated development Neon branch, review the generated SQL and commit it. Prisma Client is generated during build and excluded from Git.
+
+## Current boundaries
+
+Single shared workspace protected by a staging password; not production multi-user ready. No SQLite is used even in tests. PDF uploads only: export slides/images/Word documents as PDF. Automatic topic allocation, AI theory grading, flashcards, notes, reminders and clickable source viewers remain to be built. Quiz UI answers/countdowns do not yet recover after refresh; timers are not secure exam controls. Duplicate detection checks exact wording, not semantic paraphrases. Retrieval ranks extracted sections by keywords within a bounded context. Large documents incur OpenAI usage per section; start with a short file.

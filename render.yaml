@@ -1,13 +1,13 @@
-# Free staging: uploaded PDFs and SQLite data are ephemeral.
-# No persistent disk or paid resource is provisioned.
+# Free Render compute; durable data lives externally in Neon.
 services:
   - type: web
     name: studentpal-staging
     runtime: node
     plan: free
     branch: main
-    buildCommand: npm ci --include=dev && npm run typecheck && npm test
-    startCommand: npm start
+    buildCommand: npm ci --include=dev && npm run build && npm test
+    # Free Render has no pre-deploy command; apply committed migrations before startup.
+    startCommand: npm run db:migrate && npm start
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
@@ -16,11 +16,22 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
-      # Render supplies PORT and RENDER_EXTERNAL_HOSTNAME automatically.
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4.1
+      - key: DATABASE_URL
+        sync: false
+      - key: AWS_ENDPOINT_URL_S3
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
       - key: STAGING_USERNAME
         value: studentpal
       - key: STAGING_PASSWORD

@@ -1,0 +1,20 @@
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+  moduleFormat = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Keep the existing course document shape during the storage migration.
+// The private quiz answer key remains in server-side JSON, never public output.
+model Course {
+  id        String   @id
+  body      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
