@@ -1,19 +1,42 @@
 # StudentPal
 
-Node.js + TypeScript student learning prototype with a responsive interface, **Neon Postgres through Prisma ORM**, private **Neon S3-compatible Object Storage**, and direct OpenAI PDF understanding. No SQLite, local document storage, Python, Base44 or Lovable runtime is required.
+Node.js + TypeScript learning app with Neon Postgres through Prisma, private Neon Object Storage, OpenAI PDF understanding, and **Better Auth email/password accounts**. Better Auth runs inside our Node app and persists its users, hashed passwords and sessions in Neon Postgres. This setup does not require enabling Neon Managed Auth or a second identity service.
 
-## Configure Neon
+## Signup and sign-in
 
-1. Create a Neon staging project/branch in a region supporting Object Storage. Keep database and storage on the same intended branch.
-2. Copy the pooled Postgres connection string into `DATABASE_URL`, preserving `sslmode=require`. Optionally set `DIRECT_URL` to the direct connection string for migrations.
-3. Create a **private** bucket such as `studentpal-materials`. Obtain the branch's S3 endpoint, region, access key and secret key with storage read/write access. Copy them to `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and set `S3_BUCKET` to the actual bucket name. These are storage credentials, not a Neon account API key.
-4. Set `OPENAI_API_KEY` in your server environment. Never commit or share credentials in chat.
+New visitors see the StudentPal signup page with name, email, password and password confirmation. Existing students can switch to sign-in. Signup creates an account and signs the student in; reload restores the session. Sign-out revokes the session and clears the app's displayed data.
 
-Official setup: https://neon.com/docs/storage/get-started and https://neon.com/docs/guides/prisma
+The old browser Basic Auth challenge and shared staging password have been removed. Existing `STAGING_PASSWORD` / `STAGING_USERNAME` settings are ignored and can be deleted from Render. They are not student credentials.
 
-## Start locally
+Better Auth hashes passwords, issues HttpOnly SameSite cookies (Secure on Render HTTPS), validates sessions on protected APIs and limits auth request rates. Passwords need at least 12 characters. Email verification and forgotten-password email delivery are not configured yet; the UI does not pretend those services are available. Social login is not enabled.
 
-Use Node.js 24 or newer. Copy `.env.example` to `.env` and fill in the values, then run:
+Courses now have a relational `ownerId`. Listing and all course operations check the signed-in user. Private PDFs remain reachable only by backend storage credentials. Old shared courses with no owner remain hidden; they are not assigned automatically to the next signup. An administrator must explicitly assign/import them after verifying their owner, or students can re-upload test materials.
+
+## Neon configuration
+
+Use your existing intended Neon project and branch in a region with Object Storage. The checked-in `neon.ts` declares a private bucket named `assets` and leaves Neon Managed Auth disabled because auth runs in the app.
+
+Required server variables:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Pooled Neon Postgres connection string, preserving SSL settings |
+| `DATABASE_URL_UNPOOLED` | Direct Neon connection string for migrations (recommended) |
+| `AWS_ENDPOINT_URL_S3` | Neon branch's S3-compatible storage endpoint |
+| `AWS_REGION` | Neon storage region |
+| `AWS_ACCESS_KEY_ID` | Neon storage access key |
+| `AWS_SECRET_ACCESS_KEY` | Neon storage secret |
+| `S3_BUCKET` | `assets` unless you deliberately override the bucket |
+| `BETTER_AUTH_SECRET` | Stable random secret, at least 32 characters |
+| `OPENAI_API_KEY` | Your OpenAI developer API key for lessons and PDF reading |
+
+`BETTER_AUTH_URL` is optional: on Render the app uses `https://` plus `RENDER_EXTERNAL_HOSTNAME`; locally it defaults to `http://127.0.0.1:8000`. If using a custom domain or different local address, set `BETTER_AUTH_URL` to the exact browser origin. The server host allowlist currently supports localhost and Render's provided hostname only. Keep the session secret stable across deploys; rotating it signs users out.
+
+The `AWS_*` names are Neon's standard object-storage variables. **No AWS account or Amazon S3 bucket is needed.** Official setup: https://neon.com/docs/storage/get-started
+
+## Local setup
+
+Use Node.js 24+. Copy `.env.example` to `.env` and set the real credentials, or let Neon pull `.env.local`. Never commit either file.
 
 ```sh
 npm ci
@@ -22,64 +45,52 @@ npm run db:migrate
 npm start
 ```
 
-Open http://127.0.0.1:8000. `OPENAI_MODEL` defaults to `gpt-4.1`. OpenAI API usage requires separate API credits. Merely configuring a key is not a verified successful AI connection.
+Open http://127.0.0.1:8000 and create an account. The app and Prisma load `.env.local` then `.env` without overriding hosted environment variables. Prisma migrations prefer `DATABASE_URL_UNPOOLED`, then `DIRECT_URL`, then `DATABASE_URL`. Runtime queries use the pooled `DATABASE_URL`.
 
-## Render staging (free)
+Optional Neon CLI setup using the previously supplied project:
 
-Choose **New > Blueprint**, connect this repository and select the root `render.yaml`. It creates one free service on `main`; no paid disk or Render database is provisioned. Fill the secret environment fields with Neon and OpenAI values. If you need a direct migration connection, also add `DIRECT_URL` in the service Environment settings.
+```sh
+npx neon@latest init -y --org-id org-divine-recipe-31994909 --project-id dark-king-17816320 --branch production --services postgres,object-storage
+npx neon@latest deploy
+```
 
-Render runs Prisma generation, TypeScript checks and offline tests during build. Startup applies committed migrations with `prisma migrate deploy` before listening on Render's supplied `PORT` and `0.0.0.0`. The deployment will fail clearly until Neon credentials and bucket are configured. Never run `prisma migrate dev` or `db push` during deployment.
+Complete browser authentication if requested. A local `.neon` link alone is not verification that provisioning succeeded. CLI authentication was previously blocked in this development session, so live Neon verification remains pending.
 
-Retrieve Render's generated `STAGING_PASSWORD` from the service Environment page. Sign in using username `studentpal` and that password. This is a shared staging workspace, not separate student accounts. Public `/healthz` is a process liveness check; startup verifies database access but health checks do not call OpenAI or prove bucket access.
+## Render staging on the free plan
 
-Free Render services can sleep, restart and lose their local filesystem. Course data and PDFs now live externally and survive those events, subject to your Neon project's retention and plan limits. A running document job is interrupted if Render stops; retry resumes after the last saved five-page section. Sleep can still cause cold-start delays. Use one staging instance: distributed processing leases and durable job workers are not implemented.
+Connect the repository with **New > Blueprint** using `render.yaml`, or sync the existing Blueprint. The Blueprint generates `BETTER_AUTH_SECRET`; check that the new variable exists before deployment. For a manually configured Render service, generate a stable random secret yourself (for example `openssl rand -base64 32`) and add it securely.
 
-## Storage design
+The build runs Prisma generation, TypeScript checks and local tests. Startup runs `prisma migrate deploy` before starting the server. The new account migration creates Better Auth tables and adds the nullable course-owner relation without deleting old courses. Do not bypass migrations. No paid Render disk or database is provisioned.
 
-Prisma's `Course` table stores the existing course document in JSONB with timestamps, preserving the current API/UI format during migration. The document includes plans, extracted content, quiz history and private active quiz answer keys. This is an incremental migration, not a normalized multi-user schema. PDFs use random course-ID object keys, private S3 requests, and path-style addressing; no public URLs are needed.
+`HOST=0.0.0.0`, Render's assigned `PORT`, and `/healthz` support service networking. `/`, `/signup` and `/signin` are public app shells. The health endpoint makes no AI calls and is only a liveness check. Private API calls return JSON 401 when unauthenticated, never a `WWW-Authenticate` browser challenge.
 
-Upload stores the PDF before saving its record and attempts object cleanup if the database write fails. Deletion removes the object first, preserving the record if storage deletion fails. Database and object storage cannot share an atomic transaction; interrupted operations can require orphan cleanup. Full account ownership and distributed locking remain future work.
+Free Render can sleep and restart. Persistent data lives in Neon. Document reading resumes from the last saved section when retried. Use one instance until durable processing leases and distributed jobs are implemented. Auth rate limits use an app-controlled client-IP header derived from the socket, not client-provided forwarded headers. Behind Render's proxy some users can share a rate-limit bucket; multi-instance rate-limit storage/proxy tuning remains future work.
 
-There is deliberately no automatic local fallback. Existing SQLite databases and local PDFs are **not imported** by this migration. Preserve/export any old data before retiring an old deployment, or re-upload test materials after switching.
+## Features and current boundaries
 
-## Current features
+- Multiple private courses with PDF uploads up to 20 MB.
+- OpenAI reads text, equations, tables and visual page content in five-page sections; saved partial work and source labels.
+- Lessons, nonconsecutive study dates, completion tracking.
+- Quick Quiz (5-15) and Main Quiz (15-100), MCQ/theory/mixed, private backend answer keys, MCQ grading, theory self-review and saved history.
+- Resource search links and course deletion.
 
-- Multiple courses, PDF uploads up to 20 MB, private remote storage.
-- OpenAI extracts text, equations, tables and visual page descriptions in five-page sections with source labels.
-- Visible processing progress, saved partial work and retry/restart recovery.
-- Source-grounded lessons and examples.
-- Nonconsecutive study dates and completion tracking.
-- Quick Quiz (5-15) and Main Quiz (15-100), MCQ/theory/mixed formats, backend answer keys, deterministic MCQ grading and theory model-answer self-review.
-- Attempt history, resource search links and deletion.
+Automatic topic allocation, theory AI grading, flashcards, notes, reminders, clickable source viewers, quiz refresh recovery and semantic duplicate checks are still pending. PDF only: export slides or images to PDF first. AI output needs review; OpenAI API usage requires separate credits. No old SQLite data is imported automatically.
 
-## Development and validation
+Storage uses Prisma's `Course` JSONB document plus an authoritative owner column, and random PDF object keys. Upload attempts object cleanup after a failed database save; failed object deletion preserves the course record. Cross-service transactions are not atomic, so interrupted operations may need orphan cleanup. Full production account recovery, email verification and distributed processing are not implemented.
+
+## Validation
 
 ```sh
 npm run build
 npm test
 ```
 
-Unit tests inject explicit in-memory storage doubles. They verify API flows, errors, restart recovery, staging login and host/origin validation without cloud credentials. They are **not** proof of a live Neon or OpenAI connection. Validate an actual PDF upload, read, server restart, history retrieval and deletion once staging credentials are configured.
+Tests exercise real Better Auth handlers and password/cookie logic using an explicit test-only memory database, along with injected course/object storage doubles. They cover signup, weak passwords, duplicate signup, incorrect sign-in, sign-out revocation, session reload/restart, origin rejection, owner isolation, legacy-course isolation, upload failures and restart recovery. They do not prove a live Neon connection.
 
-For schema changes use `prisma migrate dev` against an isolated development Neon branch, review the generated SQL and commit it. Prisma Client is generated during build and excluded from Git.
-
-## Current boundaries
-
-Single shared workspace protected by a staging password; not production multi-user ready. No SQLite is used even in tests. PDF uploads only: export slides/images/Word documents as PDF. Automatic topic allocation, AI theory grading, flashcards, notes, reminders and clickable source viewers remain to be built. Quiz UI answers/countdowns do not yet recover after refresh; timers are not secure exam controls. Duplicate detection checks exact wording, not semantic paraphrases. Retrieval ranks extracted sections by keywords within a bounded context. Large documents incur OpenAI usage per section; start with a short file.
-
-## Neon CLI setup for this project
-
-The checked-in `neon.ts` declares the private `assets` bucket. Link to the intended Neon project/branch before deploying; local `.neon` links and downloaded environment files are excluded from Git.
+For live Postgres/object checks, create a disposable account in the app, configure `NEON_TEST_EMAIL` and `NEON_TEST_PASSWORD`, apply migrations, then run:
 
 ```sh
-npx neon@latest init -y --org-id org-divine-recipe-31994909 --project-id dark-king-17816320 --branch production --services postgres,object-storage
-npx neon@latest deploy
-npm run build
-npm run db:migrate
 npm run test:neon
-npm start
 ```
 
-Finish Neon browser authentication when prompted. `deploy` provisions the declared services and downloads credentials into `.env.local` (or an existing `.env`). The application and Prisma config read both files without overriding hosted environment variables. Prisma migrations prefer `DATABASE_URL_UNPOOLED`, then `DIRECT_URL`; runtime queries use `DATABASE_URL`. The storage bucket defaults to `assets`, matching `neon.ts`, and can be overridden with `S3_BUCKET`. No AWS account is needed.
-
-`test:neon` starts the real HTTP app, uploads a generated PDF, checks the real Postgres record and byte-identical object download, restarts the HTTP app, verifies the saved plan, then deletes its own test course and object. It needs real Neon credentials and applied migrations. It does not call OpenAI or test OCR. Never claim live verification based solely on the mocked unit tests.
+The script starts a local app on port 8010, signs in, uploads a generated PDF, checks the real database record and byte-identical object download, restarts the server, checks saved dates, and deletes its own test record/object. It leaves the test user account intact and does not call OpenAI. Auth session checks against the actual deployed Neon database remain to be verified after credentials are available.

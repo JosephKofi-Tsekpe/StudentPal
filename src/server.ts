@@ -2,7 +2,7 @@ import {createServer, type IncomingMessage, type ServerResponse} from 'node:http
 import {readFile} from 'node:fs/promises';
 import {createStorage} from './storage.ts';
 import type {Course,Question,Attempt,Services} from './types.ts';
-import {randomUUID,timingSafeEqual,createHash} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {PDFDocument} from 'pdf-lib';
@@ -12,7 +12,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const text=(v:unknown)=>typeof v==='string'?v:'';
 function integer(v:unknown,min:number,max:number){const n=Number(v);if(!Number.isInteger(n)||n<min||n>max)throw Error(`Choose a whole number from ${min} to ${max}.`);return n;}
 export async function createApp(services:Services=createStorage()){
- const {courses,objects}=services;
+ const {courses,objects,auth}=services;
  const jobs=new Set<string>();
  const save=(c:Course)=>courses.save(c);
  async function get(id:unknown):Promise<Course>{const c=await courses.get(text(id));if(!c)throw Error('Course not found.');return c;}
@@ -36,15 +36,16 @@ export async function createApp(services:Services=createStorage()){
   }catch(e){const c=await get(id);c.status='error';c.error=e instanceof Error?e.message:'Document reading failed.';await save(c);}finally{jobs.delete(id);}
  }
  function publicCourse(c:Course){const {active,...rest}=c;return {...rest,active:active?{token:active.token,deadline:active.deadline,questions:active.questions.map(({answer,explanation,...q})=>q)}:undefined};}
- async function action(route:string,b:Body){
+ async function action(route:string,b:Body,userId:string){
   if(route==='/api/upload'){
    const name=text(b.name).trim();if(!name||name.length>150)throw Error('Enter a course name up to 150 characters.');
    const raw=Buffer.from(text(b.file),'base64');if(!raw.length||raw.length>20_000_000)throw Error('Choose a PDF up to 20 MB.');
    let doc:PDFDocument;try{doc=await PDFDocument.load(raw);}catch{throw Error('Cannot open this PDF. Check that it is valid and not password-protected.');}
    if(!doc.getPageCount())throw Error('The PDF has no pages.');
-   const c:Course={id:randomUUID(),name,pages:doc.getPageCount(),status:'uploaded',progress:0,content:'',plan:[],attempts:[]};await objects.put(c.id+'.pdf',raw);try{await save(c);}catch(e){await objects.delete(c.id+'.pdf').catch(()=>{});throw e;}return publicCourse(c);
+   const c:Course={id:randomUUID(),ownerId:userId,name,pages:doc.getPageCount(),status:'uploaded',progress:0,content:'',plan:[],attempts:[]};await objects.put(c.id+'.pdf',raw);try{await save(c);}catch(e){await objects.delete(c.id+'.pdf').catch(()=>{});throw e;}return publicCourse(c);
   }
   let c=await get(b.id);
+  if(c.ownerId!==userId)throw Error('Course not found.');
   if(route==='/api/read'){
    if(jobs.has(c.id))throw Error('This PDF is already processing.');if(!process.env.OPENAI_API_KEY)throw Error('Set OPENAI_API_KEY in the server .env file before reading. Your PDF is saved.');
    if(c.status==='ready'){c.content='';c.progress=0;}c.status='reading';c.error='';await save(c);jobs.add(c.id);void extract(c.id).catch(()=>console.error('Document job could not save its status. Check database availability.')); return publicCourse(c);
@@ -86,21 +87,15 @@ export async function createApp(services:Services=createStorage()){
    if(!local&&!hosted)return send(403,{error:'Unrecognized host.'});
    const expectedOrigin=hosted?`https://${externalHost}`:`http://${host}`;
    if(req.headers.origin&&req.headers.origin!==expectedOrigin)return send(403,{error:'Cross-site request rejected.'});
-   const password=process.env.STAGING_PASSWORD;
-   if(externalHost&&!password)return send(503,{error:'Configure STAGING_PASSWORD before using staging.'});
-   if(password){
-    const expected=Buffer.from(`${process.env.STAGING_USERNAME||'studentpal'}:${password}`).toString('base64');
-    const supplied=(req.headers.authorization||'').replace(/^Basic /,'');
-    const hash=(v:string)=>createHash('sha256').update(v).digest();
-    if(!req.headers.authorization?.startsWith('Basic ')||!timingSafeEqual(hash(supplied),hash(expected))){
-     res.writeHead(401,{'WWW-Authenticate':'Basic realm="StudentPal staging", charset="UTF-8"','Cache-Control':'no-store'});res.end('Staging login required.');return;
-    }
-   }
-   if(req.method==='GET'&&req.url==='/api/courses')return send(200,{courses:(await courses.list()).map(publicCourse),connected:!!process.env.OPENAI_API_KEY});
-   if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'});res.end(await readFile(path.join(root,'public/index.html')));return;}
+   if(req.method==='GET'&&['/','/signin','/signup'].includes(req.url||'')){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(await readFile(path.join(root,'public/index.html')));return;}
+   if(req.url?.startsWith('/api/auth/')){await auth.handle(req,res);return;}
+   const user=await auth.getUser(req);
+   if(req.method==='GET'&&req.url==='/api/session')return send(200,{user});
+   if(!user)return send(401,{error:'Please sign in to continue.'});
+   if(req.method==='GET'&&req.url==='/api/courses')return send(200,{courses:(await courses.list(user.id)).map(publicCourse),connected:!!process.env.OPENAI_API_KEY});
    if(req.method!=='POST'||!req.url?.startsWith('/api/'))return send(404,{error:'Not found.'});
    const chunks:Buffer[]=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>28_000_000)throw Error('Upload exceeds 20 MB.');chunks.push(chunk);}
-   const body=JSON.parse(Buffer.concat(chunks).toString());if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid request.');send(200,await action(req.url,body));
+   const body=JSON.parse(Buffer.concat(chunks).toString());if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid request.');send(200,await action(req.url,body,user.id));
   }catch(e){send(400,{error:e instanceof Error?e.message:'Request failed.'});}
  });
  return {server,close:()=>courses.close()};

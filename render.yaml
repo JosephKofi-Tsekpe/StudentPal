@@ -34,7 +34,5 @@ services:
         sync: false
       - key: S3_BUCKET
         value: assets
-      - key: STAGING_USERNAME
-        value: studentpal
-      - key: STAGING_PASSWORD
+      - key: BETTER_AUTH_SECRET
         generateValue: true
