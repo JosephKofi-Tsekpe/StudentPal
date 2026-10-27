@@ -1,0 +1,27 @@
+# Free staging: uploaded PDFs and SQLite data are ephemeral.
+# No persistent disk or paid resource is provisioned.
+services:
+  - type: web
+    name: studentpal-staging
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm ci --include=dev && npm run typecheck && npm test
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "24.22.1"
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      # Render supplies PORT and RENDER_EXTERNAL_HOSTNAME automatically.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1
+      - key: STAGING_USERNAME
+        value: studentpal
+      - key: STAGING_PASSWORD
+        generateValue: true
