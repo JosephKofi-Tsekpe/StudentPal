@@ -1,7 +1,7 @@
 import {createServer, type IncomingMessage, type ServerResponse} from 'node:http';
 import {readFile,writeFile,mkdir,unlink} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,timingSafeEqual,createHash} from 'node:crypto';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {PDFDocument} from 'pdf-lib';
@@ -82,9 +82,24 @@ export async function createApp(directory=path.join(root,'data')){
  const server=createServer(async(req:IncomingMessage,res:ServerResponse)=>{
   function send(status:number,value:unknown){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(value));}
   try{
-   // Local prototype: reject untrusted Host/Origin headers to prevent browser cross-site access.
-   const host=req.headers.host||'';if(!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host))return send(403,{error:'Local access only.'});
-   if(req.headers.origin&&req.headers.origin!==`http://${host}`)return send(403,{error:'Cross-site request rejected.'});
+   if(req.method==='GET'&&req.url==='/healthz')return send(200,{status:'ok'});
+   const host=req.headers.host||'';
+   const externalHost=process.env.RENDER_EXTERNAL_HOSTNAME;
+   const local=/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host);
+   const hosted=!!externalHost&&host===externalHost;
+   if(!local&&!hosted)return send(403,{error:'Unrecognized host.'});
+   const expectedOrigin=hosted?`https://${externalHost}`:`http://${host}`;
+   if(req.headers.origin&&req.headers.origin!==expectedOrigin)return send(403,{error:'Cross-site request rejected.'});
+   const password=process.env.STAGING_PASSWORD;
+   if(externalHost&&!password)return send(503,{error:'Configure STAGING_PASSWORD before using staging.'});
+   if(password){
+    const expected=Buffer.from(`${process.env.STAGING_USERNAME||'studentpal'}:${password}`).toString('base64');
+    const supplied=(req.headers.authorization||'').replace(/^Basic /,'');
+    const hash=(v:string)=>createHash('sha256').update(v).digest();
+    if(!req.headers.authorization?.startsWith('Basic ')||!timingSafeEqual(hash(supplied),hash(expected))){
+     res.writeHead(401,{'WWW-Authenticate':'Basic realm="StudentPal staging", charset="UTF-8"','Cache-Control':'no-store'});res.end('Staging login required.');return;
+    }
+   }
    if(req.method==='GET'&&req.url==='/api/courses')return send(200,{courses:db.prepare('SELECT body FROM courses').all().map(r=>publicCourse(JSON.parse(String(r.body)))),connected:!!process.env.OPENAI_API_KEY});
    if(req.method==='GET'&&req.url==='/'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff'});res.end(await readFile(path.join(root,'public/index.html')));return;}
    if(req.method!=='POST'||!req.url?.startsWith('/api/'))return send(404,{error:'Not found.'});
@@ -94,4 +109,4 @@ export async function createApp(directory=path.join(root,'data')){
  });
  return {server,close:()=>db.close()};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){const app=await createApp();const port=Number(process.env.PORT||8000);app.server.listen(port,'127.0.0.1',()=>console.log(`Studentpal: http://127.0.0.1:${port}`));}
+if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){const app=await createApp();const port=Number(process.env.PORT||8000);app.server.listen(port,process.env.HOST||'127.0.0.1',()=>console.log(`Studentpal: http://127.0.0.1:${port}`));}
