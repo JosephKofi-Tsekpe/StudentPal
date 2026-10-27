@@ -1,3 +1,4 @@
+import './env.ts';
 import {createApp} from './server.ts';
 const app=await createApp();
 const port=Number(process.env.PORT||8000);

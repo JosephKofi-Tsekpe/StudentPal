@@ -13,10 +13,13 @@
     "test": "node --test test/*.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
-    "build": "prisma generate && tsc --noEmit"
+    "build": "prisma generate && tsc --noEmit",
+    "test:neon": "node --env-file-if-exists=.env scripts/verify-neon.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1158.0",
+    "@neon/config": "^1.9.5",
+    "@neon/env": "^1.6.6",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "dotenv": "^18.0.9",

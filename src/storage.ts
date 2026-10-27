@@ -6,7 +6,7 @@ function required(name:string){const value=process.env[name];if(!value)throw Err
 export function createStorage():Services {
  const connectionString=required('DATABASE_URL');
  const endpoint=required('AWS_ENDPOINT_URL_S3');if(new URL(endpoint).protocol!=='https:')throw Error('Object storage must use HTTPS.');
- const bucket=required('S3_BUCKET');const region=required('AWS_REGION');
+ const bucket=process.env.S3_BUCKET||'assets';const region=required('AWS_REGION');
  const client=new S3Client({endpoint,region,forcePathStyle:true,credentials:{accessKeyId:required('AWS_ACCESS_KEY_ID'),secretAccessKey:required('AWS_SECRET_ACCESS_KEY')}});
  const prisma=new PrismaClient({adapter:new PrismaPg({connectionString})});
  return {

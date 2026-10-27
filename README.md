@@ -66,3 +66,20 @@ For schema changes use `prisma migrate dev` against an isolated development Neon
 ## Current boundaries
 
 Single shared workspace protected by a staging password; not production multi-user ready. No SQLite is used even in tests. PDF uploads only: export slides/images/Word documents as PDF. Automatic topic allocation, AI theory grading, flashcards, notes, reminders and clickable source viewers remain to be built. Quiz UI answers/countdowns do not yet recover after refresh; timers are not secure exam controls. Duplicate detection checks exact wording, not semantic paraphrases. Retrieval ranks extracted sections by keywords within a bounded context. Large documents incur OpenAI usage per section; start with a short file.
+
+## Neon CLI setup for this project
+
+The checked-in `neon.ts` declares the private `assets` bucket. Link to the intended Neon project/branch before deploying; local `.neon` links and downloaded environment files are excluded from Git.
+
+```sh
+npx neon@latest init -y --org-id org-divine-recipe-31994909 --project-id dark-king-17816320 --branch production --services postgres,object-storage
+npx neon@latest deploy
+npm run build
+npm run db:migrate
+npm run test:neon
+npm start
+```
+
+Finish Neon browser authentication when prompted. `deploy` provisions the declared services and downloads credentials into `.env.local` (or an existing `.env`). The application and Prisma config read both files without overriding hosted environment variables. Prisma migrations prefer `DATABASE_URL_UNPOOLED`, then `DIRECT_URL`; runtime queries use `DATABASE_URL`. The storage bucket defaults to `assets`, matching `neon.ts`, and can be overridden with `S3_BUCKET`. No AWS account is needed.
+
+`test:neon` starts the real HTTP app, uploads a generated PDF, checks the real Postgres record and byte-identical object download, restarts the HTTP app, verifies the saved plan, then deletes its own test course and object. It needs real Neon credentials and applied migrations. It does not call OpenAI or test OCR. Never claim live verification based solely on the mocked unit tests.

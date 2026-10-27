@@ -22,6 +22,8 @@ services:
         value: gpt-4.1
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
       - key: AWS_ENDPOINT_URL_S3
         sync: false
       - key: AWS_REGION
@@ -31,7 +33,7 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: S3_BUCKET
-        sync: false
+        value: assets
       - key: STAGING_USERNAME
         value: studentpal
       - key: STAGING_PASSWORD
